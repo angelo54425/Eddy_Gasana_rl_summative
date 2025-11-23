@@ -1,0 +1,59 @@
+# Ignore virtual environments, model weights, logs, and other non-essential files
+
+
+GITIGNORE = r"""
+# Ignore virtual environment
+.venv/
+venv/
+ENV/
+
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# OS files
+.DS_Store
+Thumbs.db
+
+
+# Logs and checkpoints
+logs/
+*.log
+*.pth
+*.ckpt
+
+
+# Model directories (optional; comment out if you want them tracked)
+models/*
+!models/.gitkeep
+
+
+# TensorBoard logs
+tb_logs/
+
+
+# Videos and rendered frames
+videos/
+
+
+# IDE settings
+.vscode/
+.idea/
+
+
+# Build artifacts
+dist/
+build/
+
+
+# Jupyter
+.ipynb_checkpoints/
+"""
+
+
+with open('.gitignore','w') as f:
+f.write(GITIGNORE)

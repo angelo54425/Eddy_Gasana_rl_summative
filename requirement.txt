@@ -1,0 +1,17 @@
+# Minimal dependencies
+
+
+REQUIREMENTS = '''
+numpy
+gymnasium
+pygame
+stable-baselines3
+torch
+matplotlib
+pandas
+tensorboard
+'''
+
+
+with open('requirements.txt','w') as f:
+f.write(REQUIREMENTS)
