@@ -1,0 +1,8 @@
+{
+  "mean_reward": -29.900000000000006,
+  "median_reward": -30.02000000000001,
+  "std_reward": 0.32496153618544305,
+  "mean_length": 200.0,
+  "success_rate": 0.0,
+  "n_episodes": 50
+}
