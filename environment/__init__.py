@@ -1,6 +1,6 @@
 from gymnasium.envs.registration import register
 
-print(">>> environment package loaded")
+print(">>> REGISTERING CareerPathEnv-v0 <<<")
 
 register(
     id="CareerPathEnv-v0",

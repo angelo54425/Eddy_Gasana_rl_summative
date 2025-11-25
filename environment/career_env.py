@@ -1,247 +1,257 @@
+# FILE: environment/career_env.py
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import pygame
 
 
 class CareerPathEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array", "pygame"], "render_fps": 30}
 
-    def __init__(self, grid_size=11, max_steps=50, render_mode=None):
+    def __init__(self, grid_size=10, steps=200, render_mode=None, neutral_size=None):
+        """
+        neutral_size: width/height of the square neutral zone in the center.
+                      If None, picks 2 for even grids, 3 for odd grids (symmetric).
+        """
         super().__init__()
 
         self.grid_size = grid_size
-        self.max_steps = max_steps
+        self.steps = steps
         self.render_mode = render_mode
 
-        # ----- CONSTANTS -----
-        self.MOVE_PENALTY = -0.01
-        self.TRAIN_REWARD = +0.05
-        self.SUCCESS_REWARD = +5.0
-        self.FAILURE_PENALTY = -1.0
-        self.TIMEOUT_PENALTY = -0.5
-        self.INVALID_ATTEMPT_PENALTY = -0.5
-        self.SKILL_GAIN = 0.05
+        # Choose neutral_size symmetrically
+        if neutral_size is None:
+            self.neutral_size = 2 if (grid_size % 2 == 0) else 3
+        else:
+            self.neutral_size = neutral_size
 
-        # ----- FIELD DIFFICULTY -----
-        self.skill_thresholds = {
-            0: 0.60,  # Private
-            1: 0.90,  # Medical
-            2: 0.70,  # Finance
-            3: 0.80   # Engineering
+        # Training tiles per field
+        self.training_tiles = {
+            1: [(1, 3), (3, 1)],
+            2: [(6, 1), (8, 3)],
+            3: [(1, 6), (3, 8)],
+            4: [(6, 8), (8, 6)]
         }
 
-        # ----- ACTION SPACE -----
+        # Goal tiles per field
+        self.goal_tiles = {
+            1: (0, 0),
+            2: (grid_size - 1, 0),
+            3: (0, grid_size - 1),
+            4: (grid_size - 1, grid_size - 1)
+        }
+
+        # Skill thresholds per career path
+        self.skill_thresholds = {
+            1: 0.4,
+            2: 0.8,
+            3: 0.6,
+            4: 0.9
+        }
+
+        # Action space: 0 UP,1 DOWN,2 LEFT,3 RIGHT,4 WAIT,5 TRAIN
         self.action_space = spaces.Discrete(6)
 
-        # ----- OBSERVATION SPACE -----
-        low = np.array([0, 0, 0.0, 0.0, 0.0], dtype=float)
-        high = np.array([grid_size - 1, grid_size - 1, 1.0, 1.0, 1.0], dtype=float)
-        self.observation_space = spaces.Box(low=low, high=high, dtype=float)
+        # Observation = [x, y, zone_id, skill_level, threshold]
+        self.observation_space = spaces.Box(
+            low=np.array([0, 0, 0, 0.0, 0.0], dtype=float),
+            high=np.array([grid_size - 1, grid_size - 1, 4, 1.0, 1.0], dtype=float),
+            dtype=float
+        )
 
-        # ----- ZONE MAP -----
-        self.zone_map = self._build_zone_map()
-
-        # ----- STAR & TRAINING CELLS -----
-        self.star_cells = {
-            0: (0, 0),
-            1: (10, 0),
-            2: (0, 10),
-            3: (10, 10)
-        }
-
-        self.train_cells = {
-            0: [(1, 2), (2, 1)],
-            1: [(7, 2), (8, 1)],
-            2: [(1, 8), (2, 7)],
-            3: [(7, 8), (8, 7)]
-        }
-
-        # Status tracking
-        self.failed_star = None
-        self.status = "In Progress"
-        self.star_animation_scale = 1.0
-
-        # Sound setup
-        pygame.mixer.init()
-        self.success_sound = None
-        self.fail_sound = None
-        self.train_sound = None
-        try:
-            self.success_sound = pygame.mixer.Sound(None)
-            self.fail_sound = pygame.mixer.Sound(None)
-            self.train_sound = pygame.mixer.Sound(None)
-        except:
-            pass
-
-        self._pygame_inited = False
-
+        # runtime attributes
         self.reset()
 
-    # ------------------------------------------------------------------
-    def _build_zone_map(self):
-        zone_map = {}
-        mid = self.grid_size // 2
+    # -------------------------------
 
-        for x in range(self.grid_size):
-            for y in range(self.grid_size):
-
-                if mid - 1 <= x <= mid + 1 and mid - 1 <= y <= mid + 1:
-                    zone_map[(x, y)] = -1  # Neutral
-
-                elif x < mid and y < mid:
-                    zone_map[(x, y)] = 0
-
-                elif x > mid and y < mid:
-                    zone_map[(x, y)] = 1
-
-                elif x < mid and y > mid:
-                    zone_map[(x, y)] = 2
-
-                elif x > mid and y > mid:
-                    zone_map[(x, y)] = 3
-
-                else:
-                    zone_map[(x, y)] = -1
-
-        return zone_map
-
-    # ------------------------------------------------------------------
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        self.steps_remaining = self.max_steps
+        self.current_step = 0
 
+        # Start exactly centered in neutral zone
         mid = self.grid_size // 2
-        x = self.np_random.integers(mid - 1, mid + 2)
-        y = self.np_random.integers(mid - 1, mid + 2)
+        # place start at center cell (if neutral_size even, this will be one of the neutral cells)
+        self.agent_pos = np.array([mid, mid], dtype=int)
+        self.prev_pos = tuple(self.agent_pos)
 
-        self.agent_pos = np.array([x, y], dtype=int)
-        self.field_id = -1
+        # Select random career target (1..4)
+        self.target_zone = int(self.np_random.integers(1, 5))
+
         self.skill_level = 0.0
-        self.failed_star = None
-        self.status = "In Progress"
-        self.star_animation_scale = 1.0
+        self.locked_zone = None   # becomes non-zero when agent first enters a field zone
+        self.last_info = {"result": "In Progress"}
 
-        obs = self._get_obs()
-        return obs, {}
+        # For shaping
+        gx, gy = self.goal_tiles[self.target_zone]
+        ax, ay = self.agent_pos
+        self.prev_dist = abs(ax - gx) + abs(ay - gy)
 
-    # ------------------------------------------------------------------
+        return self._get_obs(), {}
+
+    # -------------------------------
+
     def step(self, action):
+        self.current_step += 1
         reward = 0.0
         terminated = False
         truncated = False
+        info = {"result": "In Progress"}
 
-        # ----- Movement -----
-        if action in [0, 1, 2, 3]:
-            self._move_agent(action)
-            reward += self.MOVE_PENALTY
+        x, y = int(self.agent_pos[0]), int(self.agent_pos[1])
+        old_pos = (x, y)
+        old_zone = self._get_zone(x, y)
 
-        # ----- Training -----
-        elif action == 4:
-            gain = self.SKILL_GAIN
+        # === ACTION EFFECTS ===
+        new_x, new_y = x, y
+        if action == 0:      # UP
+            new_y = max(0, y - 1)
+        elif action == 1:    # DOWN
+            new_y = min(self.grid_size - 1, y + 1)
+        elif action == 2:    # LEFT
+            new_x = max(0, x - 1)
+        elif action == 3:    # RIGHT
+            new_x = min(self.grid_size - 1, x + 1)
+        elif action == 4:    # WAIT
+            reward -= 0.1
+        elif action == 5:    # TRAIN
+            reward += self._training_reward(old_zone, old_pos)
 
-            if self.field_id in [0, 1, 2, 3]:
-                if tuple(self.agent_pos) in self.train_cells[self.field_id]:
-                    gain += 0.05
-                    if self.train_sound:
-                        self.train_sound.play()
+        new_pos = (new_x, new_y)
+        new_zone = self._get_zone(*new_pos)
 
-            self.skill_level = min(1.0, self.skill_level + gain)
-            reward += self.TRAIN_REWARD
+        # === LOCKING: if agent already locked in a zone, disallow exiting that zone ===
+        if self.locked_zone is not None:
+            # if trying to move outside locked_zone, reverse to old_pos and penalize
+            if new_zone != self.locked_zone and action in [0,1,2,3]:
+                # forbid leaving locked zone
+                reward -= 0.5
+                new_pos = old_pos
+                new_zone = old_zone
+                # we do not update position
+            else:
+                # move is allowed
+                if action in [0,1,2,3]:
+                    self.agent_pos = np.array(new_pos)
+        else:
+            # not yet locked
+            if action in [0,1,2,3]:
+                self.agent_pos = np.array(new_pos)
+                # if just entered a non-neutral zone -> lock it
+                if old_zone == 0 and new_zone != 0:
+                    self.locked_zone = new_zone
 
-        # ----- Attempt Profession -----
-        elif action == 5:
-            terminated, reward = self._attempt_profession()
+        # ==== boundary penalty if attempted to walk into wall ====
+        if new_pos == old_pos and action in [0,1,2,3]:
+            reward -= 0.2
 
-        # ----- Time Step -----
-        self.steps_remaining -= 1
-        if self.steps_remaining <= 0 and not terminated:
+        # ==== oscillation penalty ====
+        if new_pos == self.prev_pos and action in [0,1,2,3]:
+            reward -= 0.2
+
+        # ==== neutral camping tiny penalty ====
+        if new_zone == 0:
+            reward -= 0.02
+
+        # ==== entering target zone reward (only when first entering, handled by locking logic) ====
+        if old_zone != new_zone and new_zone == self.target_zone:
+            reward += 1.0
+
+        # ==== distance shaping ====
+        gx, gy = self.goal_tiles[self.target_zone]
+        ax, ay = self.agent_pos
+        dist = abs(ax - gx) + abs(ay - gy)
+        if dist < self.prev_dist:
+            reward += 0.3
+        elif dist > self.prev_dist:
+            reward -= 0.3
+        self.prev_dist = dist
+
+        # ==== step penalty ====
+        reward -= 0.05
+
+        # ==== goal check ====
+        if tuple(self.agent_pos) == self.goal_tiles[self.target_zone]:
+            info["pos"] = tuple(self.agent_pos)
+            if self.skill_level >= self.skill_thresholds[self.target_zone]:
+                reward += 12.0
+                info["result"] = "success"
+            else:
+                reward -= 6.0
+                info["result"] = "failure"
             terminated = True
-            reward += self.TIMEOUT_PENALTY
-            self.status = "Failure ❌"
 
-        # Star animation pulse
-        self.star_animation_scale = 1.0 + 0.1 * np.sin(self.steps_remaining)
+        # ==== max steps ====
+        if self.current_step >= self.steps:
+            truncated = True
 
-        obs = self._get_obs()
-        return obs, reward, terminated, truncated, {}
+        self.prev_pos = old_pos
+        self.last_info = info
+        return self._get_obs(), reward, terminated, truncated, info
 
-    # ------------------------------------------------------------------
-    def _move_agent(self, action):
-        x, y = self.agent_pos
+    # -------------------------------
 
-        if action == 0:
-            y = max(0, y - 1)
-        elif action == 1:
-            y = min(self.grid_size - 1, y + 1)
-        elif action == 2:
-            x = max(0, x - 1)
-        elif action == 3:
-            x = min(self.grid_size - 1, x + 1)
+    def _training_reward(self, zone, pos):
+        # cannot train in neutral
+        if zone == 0:
+            return -0.4
+        # training only counts in training tiles for the target zone
+        if pos in self.training_tiles[self.target_zone]:
+            old_skill = self.skill_level
+            self.skill_level = min(1.0, self.skill_level + 0.10)
+            # progressive reward
+            return 0.6 + (self.skill_level - old_skill)
+        return -0.1
 
-        proposed_zone = self.zone_map[(x, y)]
+    # -------------------------------
 
-        if self.field_id == -1 and proposed_zone in [0, 1, 2, 3]:
-            self.field_id = proposed_zone
+    def _in_neutral(self, x, y):
+        """Return True if (x,y) lies inside the symmetric neutral square in the center."""
+        mid = self.grid_size // 2
+        half = self.neutral_size // 2
+        # For even neutral_size, include mid and mid-1 etc.
+        min_x = mid - half
+        max_x = min_x + self.neutral_size - 1
+        min_y = mid - half
+        max_y = min_y + self.neutral_size - 1
+        return (min_x <= x <= max_x) and (min_y <= y <= max_y)
 
-        if self.field_id == -1 or proposed_zone == self.field_id:
-            self.agent_pos = np.array([x, y], dtype=int)
+    def _get_zone(self, x, y):
+        """
+        Zones:
+         0 = neutral center
+         1 = top-left quadrant
+         2 = top-right quadrant
+         3 = bottom-left quadrant
+         4 = bottom-right quadrant
+        The neutral square sits centered and is excluded from quadrants, guaranteeing symmetry.
+        """
+        if self._in_neutral(x, y):
+            return 0
+        mid = self.grid_size // 2
+        if x < mid and y < mid:   return 1
+        if x >= mid and y < mid:  return 2
+        if x < mid and y >= mid:  return 3
+        if x >= mid and y >= mid: return 4
+        return 0
 
-    # ------------------------------------------------------------------
-    def _attempt_profession(self):
-        pos = tuple(self.agent_pos)
+    # -------------------------------
 
-        # Invalid if not on star
-        if self.field_id == -1 or pos != self.star_cells[self.field_id]:
-            return False, self.INVALID_ATTEMPT_PENALTY
-
-        threshold = self.skill_thresholds[self.field_id]
-
-        if self.skill_level >= threshold:
-            self.status = "Success ✅"
-            if self.success_sound:
-                self.success_sound.play()
-            return True, self.SUCCESS_REWARD
-
-        self.failed_star = pos
-        self.status = "Failure ❌"
-        if self.fail_sound:
-            self.fail_sound.play()
-        return True, self.FAILURE_PENALTY
-
-    # ------------------------------------------------------------------
     def _get_obs(self):
-        field_norm = (self.field_id + 1) / 4
-        threshold = 0.0 if self.field_id == -1 else self.skill_thresholds[self.field_id]
+        x, y = int(self.agent_pos[0]), int(self.agent_pos[1])
+        zone = self._get_zone(x, y)
+        threshold = self.skill_thresholds[self.target_zone]
+        return np.array([x, y, zone, self.skill_level, threshold], dtype=float)
 
-        return np.array([
-            float(self.agent_pos[0]),
-            float(self.agent_pos[1]),
-            field_norm,
-            float(self.skill_level),
-            float(threshold)
-        ], dtype=float)
+    # -------------------------------
 
-    # ------------------------------------------------------------------
     def render(self):
-        if self.render_mode == "human":
-            print(f"Pos={self.agent_pos}, Field={self.field_id}, Skill={self.skill_level:.2f}, Steps={self.steps_remaining}, Status={self.status}")
+        if self.render_mode == "pygame":
+            if not hasattr(self, "_pygame_init"):
+                self._pygame_init = True
+                from .rendering import render_pygame
+                self._screen, self._draw, self._clock = render_pygame(self)
+            self._draw()
+            self._clock.tick(5)
 
-        elif self.render_mode == "rgb_array":
-            img = np.zeros((self.grid_size * 32, self.grid_size * 32, 3), dtype=np.uint8)
-            return img
-
-        elif self.render_mode == "pygame":
-            from .rendering import render_pygame
-
-            if not self._pygame_inited:
-                self._pygame_inited = True
-                self._pygame_screen, self._pygame_draw, self._pygame_clock = render_pygame(self)
-
-            self._pygame_draw()
-            self._pygame_clock.tick(5)
-
-    # ------------------------------------------------------------------
     def close(self):
         pass
