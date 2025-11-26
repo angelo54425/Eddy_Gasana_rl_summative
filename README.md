@@ -1,118 +1,280 @@
 # 🎓 Career Path Reinforcement Learning Environment  
-*A custom RL environment simulating a student's journey through different career fields.*
+**Student:** Eddy Gasana  
+**GitHub:** https://github.com/angelo54425/Eddy_Gasana_rl_summative.git  
+**Video Recording:** [*Demo video*](https://www.loom.com/share/615985209d4d49d4b555827266bb12c6 )
 
 ---
 
-## 📌 Overview  
-This project implements a fully custom **Reinforcement Learning environment** where an agent represents a student navigating toward a successful career path. The grid-world environment includes four career zones — **Private, Medical, Finance, Engineering** — each with training tiles and a final goal (star). The agent must choose a career, train sufficiently, and reach its goal with enough skill.
+## 📌 Project Overview  
+This project implements a custom **Gymnasium reinforcement learning environment** called **CareerPathEnv-v0**, where an agent simulates a student navigating four career fields:
 
-The project includes:
+- Private  
+- Medical  
+- Finance  
+- Engineering  
 
-- A complete **Gymnasium custom environment**  
-- A **Pygame renderer** for visualization  
-- Training scripts for **DQN, PPO, A2C, and REINFORCE**  
-- Evaluation utilities & metrics  
-- Result visualizations (reward curves)  
-- A runnable agent demo (`main.py`)
-
----
-
-## 🗂 Project Structure
-
+The agent begins in a neutral zone, selects a career path by entering a zone, trains on skill tiles, and must reach the goal star with enough skill.  
+The environment is rendered using **Pygame**, and multiple reinforcement learning algorithms (DQN, PPO, A2C, REINFORCE) were trained and evaluated.
 
 ---
 
-## 🧠 Environment Description
+## 📁 Project Structure  
+Eddy_Gasana_rl_summative/
+│
+├── environment/
+│ ├── career_env.py
+│ ├── rendering.py
+│ └── init.py
+│
+├── training/
+│ ├── dqn_training.py
+│ ├── ppo_training.py
+│ ├── a2c_training.py
+│ └── reinforce_training.py
+│
+├── evaluation/
+│ ├── eval_utils.py
+│ └── eval_all_algorithms.py
+│
+├── tests/
+│ ├── test_pygame.py
+│ └── debug_run.py
+│
+├── models/
+├── results/
+│ ├── raw_rewards/
+│ └── plots/
+│
+├── main.py
+└── README.md
 
-### 🟦 Grid Layout  
-- A **10×10 grid**  
-- **4 career zones** (colored)  
-- A central neutral zone  
-- Training tiles specific to each career  
-- A final star goal per career  
-- Once a zone is entered → it becomes **locked**
+yaml
+Copy code
 
 ---
 
-### 🎮 Action Space — `Discrete(6)`
+## 🧩 Environment Description  
 
-| Action | Meaning     |
-|--------|-------------|
-| 0 | Up    |
-| 1 | Down  |
-| 2 | Left  |
+### Grid Layout  
+- **10×10 grid**, divided into four colored quadrants.  
+- **Neutral center zone** where the agent starts.  
+- **Training tiles** inside each quadrant.  
+- **Goal star** at each quadrant’s corner.
+
+### Zone Locking  
+Once an agent enters a career zone, it becomes **locked** into that career path.
+
+---
+
+## 🧠 Agent  
+Represents a student choosing and progressing through a career.  
+The agent must:
+1. Choose a zone (career)  
+2. Train on valid tiles  
+3. Reach the goal with enough skill  
+
+---
+
+## 🎮 Action Space  
+`Discrete(6)`
+
+| Action | Meaning |
+|--------|---------|
+| 0 | Up |
+| 1 | Down |
+| 2 | Left |
 | 3 | Right |
-| 4 | Wait  |
+| 4 | Wait |
 | 5 | Train |
 
 ---
 
-### 👁 Observation Space (`shape = (5,)`)
+## 👁 Observation Space  
+A 5-element vector:
+
+[x, y, zone, skill_level, required_threshold]
+
+yaml
+Copy code
 
 ---
 
-## 🏆 Reward Structure
+## 🏆 Reward Structure  
 
-- **−0.05** per step  
-- **−0.02** idle penalty  
-- **−0.20** invalid movement  
-- **+1.0** when entering chosen career zone  
-- **+0.05 → +3** for training (scaled)  
-- **Small reward** for touching star early (episode continues)  
-- **+80** reaching the final star with enough skill  
-- **−20** timeout penalty  
+| Event | Reward |
+|-------|--------|
+| Step penalty | −0.05 |
+| Idle/wait | Small negative |
+| Invalid move / wall hit | −0.01 to −0.20 |
+| Enter zone for the first time | +1.0 |
+| Training (valid tile) | +3 → decays |
+| Training (invalid tile) | −0.20 |
+| Touch star early | Small positive, continue |
+| Reach goal with enough skill | +80 |
+| Reach goal without skill | Low reward or partial |
+| Timeout | −20 |
 
-This encourages exploration, focused training, and efficient reaching of the career goal.
+Reward shaping strongly encourages **training before goal-seeking**.
 
 ---
 
-## 🤖 Algorithms Implemented
+## 🖥 Environment Visualization  
+Rendered using **Pygame**:  
+- Colored quadrants  
+- Training tiles (arrows)  
+- Goal star  
+- Agent (black circle)  
+- Sidebar showing skill, threshold, zone, and steps  
 
-### **Deep Q-Network (DQN)**  
-- Replay memory  
-- Target network  
+---
+
+## 🏗 System Analysis & Design  
+
+### 🔹 DQN (Deep Q-Network)  
+- SB3 **MlpPolicy**  
+- Experience replay  
+- Target network updates  
 - ε-greedy exploration  
-- Tuned for sparse rewards  
-- **Best-performing model**
+- Works best with this environment due to stable gradients and temporal reward scoping.
 
-### **PPO (Proximal Policy Optimization)**  
-- Clipped objective  
-- GAE  
-- Stable Actor-Critic architecture
+**Key Hyperparameters:**  
+learning_rate: 2.5e-4
+gamma: 0.995
+buffer_size: 200000
+batch_size: 128
+train_freq: 4
+target_update_interval: 1000
+exploration_fraction: 0.40
+exploration_final_eps: 0.02
+learning_starts: 2000
 
-### **A2C (Advantage Actor Critic)**  
-- Shared network  
+yaml
+Copy code
+
+---
+
+### 🔹 PPO  
+- Clipped surrogate objective  
+- GAE advantages  
+- Good for continuous tasks, less so for sparse reward grids  
+- Network: `[256, 256]` for both policy and value
+
+---
+
+### 🔹 A2C  
+- Synchronous actor-critic  
 - Entropy regularization  
-
-### **REINFORCE (Monte-Carlo Policy Gradient)**  
-- Baseline-free  
-- Fully stochastic policy  
-- Struggles with sparse reward design  
+- Stronger exploration but less consistent than DQN
 
 ---
 
-## 📈 Evaluation Results
-
-| Algorithm | Mean Reward | Success Full | Partial | Failure |
-|----------|-------------|--------------|---------|---------|
-| **DQN** | 33.5 | **60%** | 20% | 20% |
-| **A2C** | 3.64 | 4% | 16% | 80% |
-| **PPO** | -427 | 0% | 0% | 100% |
-| **REINFORCE** | -417 | 0% | 0% | 100% |
-
-➡ **DQN is the clear top performer**
+### 🔹 REINFORCE  
+- Pure Monte-Carlo policy gradient  
+- Highest variance  
+- Weakest performance in this environment  
 
 ---
 
-## ▶ Run Demo (Random Agent)
+## 📊 Implementation Summary  
+
+### DQN Results  
+mean_reward: 33.54
+success_full_rate: 0.60
+success_partial_rate: 0.20
+failure_rate: 0.20
+
+shell
+Copy code
+
+### PPO Results  
+mean_reward: -427.2
+success_full_rate: 0.00
+failure_rate: 1.00
+
+shell
+Copy code
+
+### A2C Results  
+mean_reward: 3.64
+success_full_rate: 0.04
+
+shell
+Copy code
+
+### REINFORCE Results  
+mean_reward: -417.9
+failure_rate: 1.00
+
+yaml
+Copy code
+
+---
+
+## 📉 Results Discussion  
+
+### Cumulative Rewards  
+- **DQN outperforms all methods**, achieving 60% full success.  
+- **PPO and REINFORCE collapse** due to sparse / structured rewards.  
+- **A2C is modest** but not competitive with DQN.
+
+### Training Stability  
+- DQN stable due to replay buffer & target updates  
+- PPO unstable due to large batch/epoch requirements  
+- A2C moderate  
+- REINFORCE volatile  
+
+### Episodes to Converge  
+- DQN: converges quickly after ~20k–40k steps  
+- Others: no stable convergence without heavy tuning  
+
+### Generalization  
+DQN generalizes well within the same grid layout even from randomized starting states.
+
+---
+
+## ▶️ How to Run  
+
+### Demo (random agent + Pygame)  
 ```bash
 python3 tests/test_pygame.py
+Run the trained DQN agent
+bash
+Copy code
+python3 main.py
+Train algorithms
+bash
+Copy code
+python3 training/dqn_training.py
+python3 training/ppo_training.py
+python3 training/a2c_training.py
+python3 training/reinforce_training.py
+Evaluate all algorithms
+bash
+Copy code
+python3 evaluation/eval_all_algorithms.py --episodes 50
+🚀 Future Improvements
+Hyperparameter search (Optuna)
 
-Let me know if you want:
+Curriculum learning (progressive task difficulty)
 
-✔ Shields.io badges  
-✔ A GIF of the environment  
-✔ A “Future Work” section  
-✔ A contributors section  
+Randomized grid generation
 
-I can add any of these!
+Multi-goal or multi-agent support
+
+📝 Contact
+Eddy Gasana
+GitHub Repo: https://github.com/angelo54425/Eddy_Gasana_rl_summative.git
+
+yaml
+Copy code
+
+---
+
+If you want, I can now:
+
+✅ polish your report  
+✅ create a PDF version  
+✅ generate your 3-minute video script  
+✅ build a project poster or slides  
+
+Just tell me what you want next.
