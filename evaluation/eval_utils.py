@@ -1,14 +1,20 @@
 # evaluation/eval_utils.py
-import os
+import sys, os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/..")
+
+import environment
 import json
 import csv
 import numpy as np
 import gymnasium as gym
+
+
 from stable_baselines3 import DQN, PPO, A2C
 import torch
 import torch.nn as nn
 
-# -------- REINFORCE policy architecture (must match training) --------
+
+# Simple PolicyNet for REINFORCE evaluation if used
 class PolicyNet(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden=(128,128)):
         super().__init__()
@@ -20,56 +26,74 @@ class PolicyNet(nn.Module):
             last = h
         layers.append(nn.Linear(last, action_dim))
         self.net = nn.Sequential(*layers)
-
     def forward(self, x):
-        return self.net(x)  # logits
+        return self.net(x)
 
-# -------- Evaluation runner --------
 def make_env():
-    # import environment package (ensures registration)
-    import environment
+    import environment  # ensure registration
     return gym.make("CareerPathEnv-v0")
 
+def _score_result(info):
+    """Given env.info/result string classify as graded success:
+       returns one of: 'success_full', 'success_partial', 'failure'
+    """
+    res = info.get("result", "incomplete")
+    if res == "success":
+        return "success_full"
+    if res == "early_star" or res == "failure" or res == "incomplete":
+        # partial if star reached but insufficient skill can be labeled via info if set
+        # We expect env to set 'result' to 'failure' and maybe include 'pos' in info on termination.
+        # Evaluate more thoroughly: if 'pos' in info and env.skill < threshold it's partial.
+        # But env may not provide skill; evaluator will treat 'failure' with pos==goal as partial.
+        if info.get("pos") is not None:
+            return "success_partial"
+        return "failure"
+    return "failure"
+
 def eval_model_sb3(model, n_episodes=50, render=False, render_mode=None):
-    """
-    Evaluate a Stable-Baselines3 model (DQN/PPO/A2C).
-    Returns dict of metrics and list of episode rewards and lengths/results.
-    """
     env = make_env()
     if render and render_mode:
         env = gym.make("CareerPathEnv-v0", render_mode=render_mode)
     rewards = []
     lengths = []
-    successes = 0
-    detailed = []  # list of (total_reward, length, result)
+    counts = {"success_full":0, "success_partial":0, "failure":0}
+    detailed = []
 
     for ep in range(n_episodes):
         obs, _ = env.reset()
-        done = False
         total = 0.0
         length = 0
-        result = "incomplete"
         while True:
             action, _ = model.predict(obs, deterministic=True)
             obs, r, terminated, truncated, info = env.step(int(action))
             total += r
             length += 1
             if terminated or truncated:
+                # classify result: check info first; if not enough, use logic
                 result = info.get("result", "incomplete")
+                # For safety, if info['result']=='failure' but pos==goal, mark partial
                 if result == "success":
-                    successes += 1
+                    label = "success_full"
+                elif result == "failure" and info.get("pos") is not None:
+                    label = "success_partial"
+                else:
+                    label = "failure"
+                counts[label] += 1
+                detailed.append({"reward": total, "length": length, "result": label})
                 break
         rewards.append(total)
         lengths.append(length)
-        detailed.append({"reward": total, "length": length, "result": result})
-
     env.close()
+
     metrics = {
         "mean_reward": float(np.mean(rewards)),
         "median_reward": float(np.median(rewards)),
         "std_reward": float(np.std(rewards)),
         "mean_length": float(np.mean(lengths)),
-        "success_rate": float(successes) / float(n_episodes),
+        "success_full_rate": float(counts["success_full"]) / n_episodes,
+        "success_partial_rate": float(counts["success_partial"]) / n_episodes,
+        "failure_rate": float(counts["failure"]) / n_episodes,
+        "counts": counts,
         "n_episodes": n_episodes
     }
     return metrics, detailed
@@ -96,13 +120,12 @@ def eval_reinforce(model_path, n_episodes=50, device=None):
 
     rewards = []
     lengths = []
-    successes = 0
+    counts = {"success_full":0, "success_partial":0, "failure":0}
     detailed = []
     for ep in range(n_episodes):
         obs, _ = env.reset()
         total = 0.0
         length = 0
-        result = "incomplete"
         while True:
             x = torch.tensor(obs, dtype=torch.float32).to(device)
             logits = policy(x.unsqueeze(0)).squeeze(0)
@@ -114,11 +137,16 @@ def eval_reinforce(model_path, n_episodes=50, device=None):
             if terminated or truncated:
                 result = info.get("result", "incomplete")
                 if result == "success":
-                    successes += 1
+                    label = "success_full"
+                elif result == "failure" and info.get("pos") is not None:
+                    label = "success_partial"
+                else:
+                    label = "failure"
+                counts[label] += 1
+                detailed.append({"reward": total, "length": length, "result": label})
                 break
         rewards.append(total)
         lengths.append(length)
-        detailed.append({"reward": total, "length": length, "result": result})
 
     env.close()
     metrics = {
@@ -126,12 +154,15 @@ def eval_reinforce(model_path, n_episodes=50, device=None):
         "median_reward": float(np.median(rewards)),
         "std_reward": float(np.std(rewards)),
         "mean_length": float(np.mean(lengths)),
-        "success_rate": float(successes) / float(n_episodes),
+        "success_full_rate": float(counts["success_full"]) / n_episodes,
+        "success_partial_rate": float(counts["success_partial"]) / n_episodes,
+        "failure_rate": float(counts["failure"]) / n_episodes,
+        "counts": counts,
         "n_episodes": n_episodes
     }
     return metrics, detailed
 
-# -------- Saving utilities --------
+# Saving helpers
 def save_metrics_json(metrics, out_path):
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:

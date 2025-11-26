@@ -1,8 +1,15 @@
 {
-  "mean_reward": -29.900000000000006,
-  "median_reward": -30.02000000000001,
-  "std_reward": 0.32496153618544305,
-  "mean_length": 200.0,
-  "success_rate": 0.0,
+  "mean_reward": 3.6400000000000072,
+  "median_reward": 3.640000000000007,
+  "std_reward": 4.440892098500626e-16,
+  "mean_length": 100.0,
+  "success_full_rate": 0.0,
+  "success_partial_rate": 0.0,
+  "failure_rate": 1.0,
+  "counts": {
+    "success_full": 0,
+    "success_partial": 0,
+    "failure": 50
+  },
   "n_episodes": 50
 }

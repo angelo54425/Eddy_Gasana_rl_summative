@@ -1,85 +1,72 @@
-# FILE: training/ppo_training.py
-import os, sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# training/ppo_training.py
+import os
+import sys
+from pathlib import Path
 
-# Ensure environment package is imported (and registered)
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 import environment
 import gymnasium as gym
-
-# fallback registration if import order didn't run package __init__
-try:
-    in_registry = "CareerPathEnv-v0" in gym.registry
-except Exception:
-    in_registry = False
-
-if not in_registry:
-    from gymnasium.envs.registration import register
-    register(
-        id="CareerPathEnv-v0",
-        entry_point="environment.career_env:CareerPathEnv",
-    )
-
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import EvalCallback
-import torch as _torch
+from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold, CheckpointCallback
 
-def make_env(render_mode=None):
-    # Create single environment for training (headless)
-    env = gym.make("CareerPathEnv-v0", render_mode=render_mode)
-    return env
+import logging
+logging.basicConfig(level=logging.INFO)
+
+
+def make_env():
+    import environment  # noqa
+    return gym.make("CareerPathEnv-v0")
+
 
 def main():
-    run_name = "ppo_run"
     model_dir = "models/ppo"
     os.makedirs(model_dir, exist_ok=True)
+    os.makedirs("runs/ppo", exist_ok=True)
+    os.makedirs("models/ppo/checkpoints", exist_ok=True)
 
-    # Hyperparameters (recommended defaults from tuning plan)
-    policy_kwargs = dict(net_arch=[256, 256])
-    learning_rate = 3e-4
-    n_steps = 2048
-    batch_size = 64
-    gamma = 0.99
-    clip_range = 0.2
-    total_timesteps = 500_000  # change if you want
+    base_env = Monitor(make_env())
+    env = DummyVecEnv([lambda: base_env])
 
-    env = make_env()
-    env = Monitor(env)
-
-    # evaluation env (no rendering)
+    # small reward threshold example; adjust later based on eval metrics
+    stop_callback = StopTrainingOnRewardThreshold(reward_threshold=float(os.environ.get("PPO_STOP_REWARD", 120.0)), verbose=1)
     eval_env = make_env()
-    eval_env = Monitor(eval_env)
-
-    model = PPO(
-        "MlpPolicy",
-        env,
-        policy_kwargs=policy_kwargs,
-        learning_rate=learning_rate,
-        n_steps=n_steps,
-        batch_size=batch_size,
-        gamma=gamma,
-        clip_range=clip_range,
-        verbose=1,
-        tensorboard_log="results/ppo_tb"
-    )
-
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=model_dir,
-        log_path="results/ppo_eval",
-        eval_freq=5000,
+        log_path="results/ppo_logs",
+        eval_freq=5_000,
         deterministic=True,
-        render=False
+        callback_on_new_best=stop_callback
     )
 
-    print("Starting PPO training...")
-    model.learn(total_timesteps=total_timesteps, callback=eval_callback)
-    path = os.path.join(model_dir, "ppo_final_model")
-    model.save(path)
-    print(f"PPO model saved to: {path}")
+    checkpoint = CheckpointCallback(save_freq=25_000, save_path=str(Path(model_dir) / "checkpoints"), name_prefix="ppo_ckpt")
 
+    model = PPO(
+        policy="MlpPolicy",
+        env=env,
+        learning_rate=3e-4,
+        n_steps=1024,
+        batch_size=256,
+        n_epochs=8,
+        gamma=0.995,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        policy_kwargs={"net_arch": [256, 256]},
+        verbose=1,
+        tensorboard_log="runs/ppo"
+    )
+
+    total_timesteps = int(os.environ.get("PPO_TIMESTEPS", 150_000))
+    model.learn(total_timesteps=total_timesteps, callback=[eval_callback, checkpoint])
+    model.save(str(Path(model_dir) / "ppo_final_model"))
     env.close()
     eval_env.close()
+    print("PPO training finished. Model saved to models/ppo/ppo_final_model.zip")
+
 
 if __name__ == "__main__":
     main()
